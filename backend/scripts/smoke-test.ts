@@ -333,9 +333,22 @@ async function main() {
   // ---------------------- products and inventory ----------------------------
   section('Products and inventory');
 
-  const productList = await call('GET', '/products', { token: salesToken });
+  const productList = await call('GET', '/products?limit=100', { token: salesToken });
   status('list products', productList, 200);
-  check('six seeded products returned', productList.body?.data?.length === 6, `${productList.body?.data?.length}`);
+
+  // Asserting an exact count would break as soon as this script creates its own
+  // test products, so check that each seeded product is actually there instead.
+  const seededCodes = [
+    'BRG-6204',
+    'VLV-HYD-32',
+    'FST-M12-HT',
+    'BLT-V-B75',
+    'SEA-OR-NBR',
+    'MTR-IND-5HP',
+  ];
+  const returnedCodes = new Set((productList.body?.data ?? []).map((p: any) => p.productCode));
+  const absent = seededCodes.filter((code) => !returnedCodes.has(code));
+  check('all six seeded products are present', absent.length === 0, absent.length ? `missing ${absent.join(', ')}` : 'all present');
 
   const first = productList.body?.data?.[0];
   check(
@@ -853,6 +866,237 @@ async function main() {
     `reserved ${burstFinal?.reservedQty} of physical ${burstFinal?.physicalQty}`,
   );
   check('available is exactly 0', burstFinal?.availableQty === 0);
+
+  // -------------------------------- dispatch --------------------------------
+  section('Dispatch');
+
+  const dispProduct = (
+    await call('POST', '/products', {
+      token: adminToken,
+      body: {
+        productCode: `DISP-${stamp}`,
+        name: 'Dispatch test widget',
+        category: 'Test',
+        unit: 'NOS',
+        basePrice: 100,
+        openingQty: 100,
+      },
+    })
+  ).body?.data;
+
+  const pendingBuild = await buildOrder(dispProduct.id, 60);
+  await accept(pendingBuild.quotation.id);
+  const dispOrder = (
+    await call('POST', `/quotations/${pendingBuild.quotation.id}/convert`, { token: salesToken })
+  ).body?.data;
+
+  const dispatchBody = {
+    dispatchDate: today,
+    vehicleNumber: 'MH12AB1234',
+    driverName: 'Suresh Patil',
+    items: [{ productId: dispProduct.id, quantity: 60 }],
+  };
+
+  status(
+    'a PENDING order cannot be dispatched',
+    await call('POST', `/sales-orders/${dispOrder.id}/dispatch`, {
+      token: adminToken,
+      body: dispatchBody,
+    }),
+    409,
+  );
+
+  await call('POST', `/sales-orders/${dispOrder.id}/confirm`, { token: adminToken });
+  const beforeDispatch = (await call('GET', `/inventory/${dispProduct.id}`, { token: adminToken }))
+    .body?.data;
+  check(
+    'before dispatch: physical 100, reserved 60, available 40',
+    beforeDispatch?.physicalQty === 100 &&
+      beforeDispatch?.reservedQty === 60 &&
+      beforeDispatch?.availableQty === 40,
+    `${beforeDispatch?.physicalQty}/${beforeDispatch?.reservedQty}/${beforeDispatch?.availableQty}`,
+  );
+
+  status(
+    'sales cannot dispatch',
+    await call('POST', `/sales-orders/${dispOrder.id}/dispatch`, {
+      token: salesToken,
+      body: dispatchBody,
+    }),
+    403,
+  );
+
+  status(
+    'cannot dispatch more than remains on the line',
+    await call('POST', `/sales-orders/${dispOrder.id}/dispatch`, {
+      token: adminToken,
+      body: { ...dispatchBody, items: [{ productId: dispProduct.id, quantity: 61 }] },
+    }),
+    409,
+  );
+
+  const dispatched = await call('POST', `/sales-orders/${dispOrder.id}/dispatch`, {
+    token: adminToken,
+    body: dispatchBody,
+  });
+  status('admin dispatches the full order', dispatched, 201);
+  check(
+    'dispatch number follows DSP-YYYYMM-NNNN',
+    /^DSP-\d{6}-\d{4}$/.test(dispatched.body?.data?.dispatchNumber ?? ''),
+    dispatched.body?.data?.dispatchNumber,
+  );
+
+  const afterDispatch = (await call('GET', `/inventory/${dispProduct.id}`, { token: adminToken }))
+    .body?.data;
+  check(
+    'after dispatch: physical 40, reserved 0, available 40',
+    afterDispatch?.physicalQty === 40 &&
+      afterDispatch?.reservedQty === 0 &&
+      afterDispatch?.availableQty === 40,
+    `${afterDispatch?.physicalQty}/${afterDispatch?.reservedQty}/${afterDispatch?.availableQty}`,
+  );
+
+  const orderAfterDispatch = (
+    await call('GET', `/sales-orders/${dispOrder.id}`, { token: adminToken })
+  ).body?.data;
+  check('order became DISPATCHED', orderAfterDispatch?.status === 'DISPATCHED', orderAfterDispatch?.status);
+
+  status(
+    'the same quantity cannot be dispatched twice',
+    await call('POST', `/sales-orders/${dispOrder.id}/dispatch`, {
+      token: adminToken,
+      body: dispatchBody,
+    }),
+    409,
+  );
+
+  status(
+    'a dispatched order cannot be cancelled',
+    await call('POST', `/sales-orders/${dispOrder.id}/cancel`, {
+      token: adminToken,
+      body: { reason: 'too late' },
+    }),
+    409,
+  );
+
+  // --- partial dispatch ---
+  section('Partial dispatch');
+
+  const partProduct = (
+    await call('POST', '/products', {
+      token: adminToken,
+      body: {
+        productCode: `PART-${stamp}`,
+        name: 'Partial dispatch widget',
+        category: 'Test',
+        unit: 'NOS',
+        basePrice: 50,
+        openingQty: 200,
+      },
+    })
+  ).body?.data;
+
+  const partBuild = await buildOrder(partProduct.id, 50);
+  await accept(partBuild.quotation.id);
+  const partOrder = (
+    await call('POST', `/quotations/${partBuild.quotation.id}/convert`, { token: salesToken })
+  ).body?.data;
+  await call('POST', `/sales-orders/${partOrder.id}/confirm`, { token: adminToken });
+
+  status(
+    'first partial dispatch of 20',
+    await call('POST', `/sales-orders/${partOrder.id}/dispatch`, {
+      token: adminToken,
+      body: {
+        dispatchDate: today,
+        vehicleNumber: 'MH14XY5678',
+        driverName: 'Ramesh Jadhav',
+        items: [{ productId: partProduct.id, quantity: 20 }],
+      },
+    }),
+    201,
+  );
+
+  const midPart = (await call('GET', `/sales-orders/${partOrder.id}`, { token: adminToken })).body
+    ?.data;
+  check('order stays CONFIRMED after a partial dispatch', midPart?.status === 'CONFIRMED', midPart?.status);
+  check('line shows 20 dispatched, 30 remaining', midPart?.items?.[0]?.dispatchedQty === 20 && midPart?.items?.[0]?.remainingQty === 30);
+
+  const midStock = (await call('GET', `/inventory/${partProduct.id}`, { token: adminToken })).body
+    ?.data;
+  check(
+    'partial dispatch moved both numbers by 20',
+    midStock?.physicalQty === 180 && midStock?.reservedQty === 30,
+    `physical ${midStock?.physicalQty}, reserved ${midStock?.reservedQty}`,
+  );
+
+  status(
+    'cannot dispatch 40 when only 30 remain',
+    await call('POST', `/sales-orders/${partOrder.id}/dispatch`, {
+      token: adminToken,
+      body: {
+        dispatchDate: today,
+        vehicleNumber: 'MH14XY5678',
+        driverName: 'Ramesh Jadhav',
+        items: [{ productId: partProduct.id, quantity: 40 }],
+      },
+    }),
+    409,
+  );
+
+  status(
+    'final dispatch of the remaining 30',
+    await call('POST', `/sales-orders/${partOrder.id}/dispatch`, {
+      token: adminToken,
+      body: {
+        dispatchDate: today,
+        vehicleNumber: 'MH14XY5678',
+        driverName: 'Ramesh Jadhav',
+        items: [{ productId: partProduct.id, quantity: 30 }],
+      },
+    }),
+    201,
+  );
+
+  const endPart = (await call('GET', `/sales-orders/${partOrder.id}`, { token: adminToken })).body
+    ?.data;
+  check('order becomes DISPATCHED once every line has left', endPart?.status === 'DISPATCHED', endPart?.status);
+
+  const endStock = (await call('GET', `/inventory/${partProduct.id}`, { token: adminToken })).body
+    ?.data;
+  check(
+    'reservation fully consumed',
+    endStock?.physicalQty === 150 && endStock?.reservedQty === 0,
+    `physical ${endStock?.physicalQty}, reserved ${endStock?.reservedQty}`,
+  );
+
+  // --- a cancelled order must never ship ---
+  const cancelledBuild = await buildOrder(partProduct.id, 10);
+  await accept(cancelledBuild.quotation.id);
+  const cancelledOrder = (
+    await call('POST', `/quotations/${cancelledBuild.quotation.id}/convert`, { token: salesToken })
+  ).body?.data;
+  await call('POST', `/sales-orders/${cancelledOrder.id}/confirm`, { token: adminToken });
+  await call('POST', `/sales-orders/${cancelledOrder.id}/cancel`, {
+    token: adminToken,
+    body: { reason: 'customer withdrew' },
+  });
+
+  status(
+    'a cancelled order cannot be dispatched',
+    await call('POST', `/sales-orders/${cancelledOrder.id}/dispatch`, {
+      token: adminToken,
+      body: {
+        dispatchDate: today,
+        vehicleNumber: 'MH14XY5678',
+        driverName: 'Ramesh Jadhav',
+        items: [{ productId: partProduct.id, quantity: 10 }],
+      },
+    }),
+    409,
+  );
+
+  status('list dispatches', await call('GET', '/dispatches', { token: salesToken }), 200);
 
   // ------------------------------ summary -----------------------------------
   console.log(`\n${'='.repeat(60)}`);
