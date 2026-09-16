@@ -1,0 +1,42 @@
+// ---------------------------------------------------------------------------
+// ERP — Enquiry → Quotation → Sales Order → Reservation → Dispatch
+//
+// This file currently holds only what authentication needs. The full domain
+// model (customers, products, inventory, enquiries, quotations, sales orders
+// and dispatches) is added next.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// The business has exactly two kinds of user.
+///
+///   SALES — creates customers and enquiries, prepares quotations, converts an
+///           accepted quotation into a sales order, and can see stock levels.
+///   ADMIN — everything SALES can do, plus the operations that move stock:
+///           confirming an order (which reserves inventory), dispatching, and
+///           adjusting inventory.
+enum Role {
+  ADMIN
+  SALES
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([role])
+  @@map("users")
+}
