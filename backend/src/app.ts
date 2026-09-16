@@ -29,7 +29,11 @@ export function createApp() {
   );
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
-  app.use(morgan(env.isProd ? 'combined' : 'dev'));
+  // Request logging is noise during the test run, where hundreds of requests
+  // are issued and the only interesting output is the assertions.
+  if (env.NODE_ENV !== 'test') {
+    app.use(morgan(env.isProd ? 'combined' : 'dev'));
+  }
   app.use('/api', globalRateLimiter);
 
   // Health probe — used by Render's health check and by the frontend.
