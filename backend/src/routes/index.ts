@@ -1,10 +1,11 @@
 import { Router } from 'express';
+import authRoutes from '../modules/auth/auth.routes';
 
 /**
  * Central API router.
  *
  * Feature routers are mounted here as each module is built:
- *   /auth          login and profile
+ *   /auth          login and profile                        (done)
  *   /customers     customer master
  *   /enquiries     customer enquiries and their line items
  *   /products      product master
@@ -23,9 +24,18 @@ router.get('/', (_req, res) => {
       version: '1.0.0',
       health: '/api/health',
       workflow: 'Enquiry → Quotation → Sales Order → Inventory Reservation → Dispatch',
-      endpoints: {},
+      endpoints: {
+        auth: {
+          'POST /api/auth/login': 'Exchange email and password for a JWT',
+          'GET /api/auth/me': 'Profile of the authenticated user',
+          'POST /api/auth/logout': 'Client-side token disposal',
+          'GET /api/auth/admin-check': 'ADMIN-only route demonstrating server-side RBAC',
+        },
+      },
     },
   });
 });
+
+router.use('/auth', authRoutes);
 
 export default router;
