@@ -8,6 +8,7 @@ import {
   updateQuotationStatusSchema,
 } from './quotation.schema';
 import * as controller from './quotation.controller';
+import * as salesOrderController from '../sales-orders/salesOrder.controller';
 
 const router = Router();
 
@@ -29,6 +30,18 @@ router.patch(
   authorize('ADMIN', 'SALES'),
   validate({ params: idParamSchema, body: updateQuotationStatusSchema }),
   controller.updateStatus,
+);
+
+/**
+ * Conversion lives on the quotation path because that is where the brief puts
+ * it, and because the quotation is what the caller has in hand. The handler
+ * itself belongs to the sales order module, which owns everything about orders.
+ */
+router.post(
+  '/:id/convert',
+  authorize('ADMIN', 'SALES'),
+  validate({ params: idParamSchema }),
+  salesOrderController.convert,
 );
 
 export default router;

@@ -5,6 +5,7 @@ import enquiryRoutes from '../modules/enquiries/enquiry.routes';
 import productRoutes from '../modules/products/product.routes';
 import inventoryRoutes from '../modules/inventory/inventory.routes';
 import quotationRoutes from '../modules/quotations/quotation.routes';
+import salesOrderRoutes from '../modules/sales-orders/salesOrder.routes';
 
 /**
  * Central API router.
@@ -68,6 +69,17 @@ router.get('/', (_req, res) => {
           'GET /api/quotations/:id': 'Quotation detail with priced line items',
           'PATCH /api/quotations/:id/status':
             'DRAFT to SENT, SENT to ACCEPTED or REJECTED (ADMIN, SALES)',
+          'POST /api/quotations/:id/convert':
+            'Convert an ACCEPTED quotation into a sales order (ADMIN, SALES)',
+        },
+        salesOrders: {
+          'GET /api/sales-orders': 'Paginated list with status and customer filters',
+          'GET /api/sales-orders/:id':
+            'Order detail; each line carries ordered, dispatched and live stock',
+          'POST /api/sales-orders/:id/confirm':
+            'Confirm and reserve inventory inside a locked transaction (ADMIN)',
+          'POST /api/sales-orders/:id/cancel':
+            'Cancel and release any stock still reserved (ADMIN)',
         },
       },
     },
@@ -80,5 +92,6 @@ router.use('/enquiries', enquiryRoutes);
 router.use('/products', productRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/quotations', quotationRoutes);
+router.use('/sales-orders', salesOrderRoutes);
 
 export default router;
