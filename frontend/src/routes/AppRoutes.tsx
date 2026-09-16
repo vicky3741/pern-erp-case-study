@@ -1,15 +1,16 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { PageLoader } from '@/components/ui';
+import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
+import { LoginPage } from '@/pages/LoginPage';
+import { EnquiriesPage } from '@/pages/EnquiriesPage';
+import { QuotationsPage } from '@/pages/QuotationsPage';
+import { SalesOrdersPage } from '@/pages/SalesOrdersPage';
 
 /**
- * Route table.
- *
- * The brief asks for exactly four screens, mounted here as each is built:
- *   /login         authentication
- *   /enquiries     create and view enquiries
- *   /quotations    create quotations, accept / reject
- *   /sales-orders  stock availability, confirm / reserve, dispatch
+ * The four screens the brief asks for. Each list/detail pair shares one page
+ * component — /enquiries and /enquiries/:id both render EnquiriesPage, which
+ * reads the id (if any) from useParams to decide which view to show.
  */
 export function AppRoutes() {
   const { isLoading } = useAuth();
@@ -20,20 +21,61 @@ export function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
-      <Route path="*" element={<ScaffoldNotice />} />
-    </Routes>
-  );
-}
+      <Route path="/" element={<Navigate to="/enquiries" replace />} />
+      <Route path="/login" element={<LoginPage />} />
 
-/** Placeholder shown until the real screens are built. */
-function ScaffoldNotice() {
-  return (
-    <div className="mx-auto max-w-lg px-4 py-20 text-center">
-      <h1 className="text-xl font-semibold text-slate-900">ERP scaffold ready</h1>
-      <p className="mt-2 text-sm text-slate-500">
-        Enquiry → Quotation → Sales Order → Reservation → Dispatch
-      </p>
-    </div>
+      <Route
+        path="/enquiries"
+        element={
+          <ProtectedRoute>
+            <EnquiriesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/enquiries/:id"
+        element={
+          <ProtectedRoute>
+            <EnquiriesPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/quotations"
+        element={
+          <ProtectedRoute>
+            <QuotationsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/quotations/:id"
+        element={
+          <ProtectedRoute>
+            <QuotationsPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/sales-orders"
+        element={
+          <ProtectedRoute>
+            <SalesOrdersPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/sales-orders/:id"
+        element={
+          <ProtectedRoute>
+            <SalesOrdersPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route path="*" element={<Navigate to="/enquiries" replace />} />
+    </Routes>
   );
 }
