@@ -330,6 +330,250 @@ async function main() {
     `${new Set(numbers).size} distinct`,
   );
 
+  // ---------------------- products and inventory ----------------------------
+  section('Products and inventory');
+
+  const productList = await call('GET', '/products', { token: salesToken });
+  status('list products', productList, 200);
+  check('six seeded products returned', productList.body?.data?.length === 6, `${productList.body?.data?.length}`);
+
+  const first = productList.body?.data?.[0];
+  check(
+    'available equals physical minus reserved',
+    first?.inventory?.availableQty === first?.inventory?.physicalQty - first?.inventory?.reservedQty,
+    `${first?.productCode}: ${first?.inventory?.physicalQty} - ${first?.inventory?.reservedQty} = ${first?.inventory?.availableQty}`,
+  );
+
+  status(
+    'sales cannot create a product',
+    await call('POST', '/products', {
+      token: salesToken,
+      body: { productCode: 'X-1', name: 'Nope', category: 'X', unit: 'NOS', basePrice: 1 },
+    }),
+    403,
+  );
+
+  status('list inventory', await call('GET', '/inventory', { token: salesToken }), 200);
+
+  status(
+    'sales cannot adjust inventory',
+    await call('PATCH', `/inventory/${first.id}`, {
+      token: salesToken,
+      body: { delta: 10, reason: 'should be refused' },
+    }),
+    403,
+  );
+
+  const before = first.inventory.physicalQty;
+  const addStock = await call('PATCH', `/inventory/${first.id}`, {
+    token: adminToken,
+    body: { delta: 25, reason: 'smoke test goods inward' },
+  });
+  status('admin adds stock', addStock, 200);
+  check(
+    'physical stock increased by the delta',
+    addStock.body?.data?.physicalQty === before + 25,
+    `${before} -> ${addStock.body?.data?.physicalQty}`,
+  );
+
+  const removeStock = await call('PATCH', `/inventory/${first.id}`, {
+    token: adminToken,
+    body: { delta: -25, reason: 'smoke test reversal' },
+  });
+  status('admin removes stock', removeStock, 200);
+  check('physical stock back to where it started', removeStock.body?.data?.physicalQty === before);
+
+  status(
+    'stock cannot be driven negative',
+    await call('PATCH', `/inventory/${first.id}`, {
+      token: adminToken,
+      body: { delta: -9_999_999, reason: 'should be refused' },
+    }),
+    409,
+  );
+
+  status(
+    'adjustment needs exactly one of physicalQty or delta',
+    await call('PATCH', `/inventory/${first.id}`, {
+      token: adminToken,
+      body: { physicalQty: 10, delta: 5, reason: 'ambiguous' },
+    }),
+    400,
+  );
+
+  // ----------------------------- quotations ---------------------------------
+  section('Quotation pricing');
+
+  const qEnquiry = await call('POST', '/enquiries', {
+    token: salesToken,
+    body: {
+      customerId: customer.id,
+      enquiryDate: today,
+      requiredDate: nextMonth,
+      items: [
+        { productId: products[0]!.id, quantity: 100 },
+        { productId: products[1]!.id, quantity: 40 },
+      ],
+    },
+  });
+  status('enquiry for quotation created', qEnquiry, 201);
+  const qEnquiryId = qEnquiry.body?.data?.id;
+
+  const num = (v: unknown) => Number(v);
+
+  // 100 x 250.00, 10% discount, 18% GST -> base 25000, disc 2500,
+  //                                        taxable 22500, gst 4050, line 26550
+  //  40 x 12500.00, 5% discount, 18% GST -> base 500000, disc 25000,
+  //                                        taxable 475000, gst 85500, line 560500
+  const quote = await call('POST', '/quotations', {
+    token: salesToken,
+    body: {
+      enquiryId: qEnquiryId,
+      quotationDate: today,
+      validUntil: nextMonth,
+      // Deliberately wrong totals. The schema strips them; the server must
+      // ignore them completely and compute its own.
+      grandTotal: 1,
+      subTotal: 1,
+      items: [
+        {
+          productId: products[0]!.id,
+          quantity: 100,
+          unitPrice: 250,
+          discountPercent: 10,
+          gstPercent: 18,
+          lineAmount: 1,
+        },
+        {
+          productId: products[1]!.id,
+          quantity: 40,
+          unitPrice: 12500,
+          discountPercent: 5,
+          gstPercent: 18,
+        },
+      ],
+    },
+  });
+  status('create quotation', quote, 201);
+
+  const q = quote.body?.data;
+  check('quotation number follows QT-YYYYMM-NNNN', /^QT-\d{6}-\d{4}$/.test(q?.quotationNumber ?? ''), q?.quotationNumber);
+  check('quotation starts as DRAFT', q?.status === 'DRAFT', q?.status);
+
+  const line1 = q?.items?.find((i: any) => i.productId === products[0]!.id);
+  const line2 = q?.items?.find((i: any) => i.productId === products[1]!.id);
+  check('line 1 amount is 26550.00', num(line1?.lineAmount) === 26550, `got ${line1?.lineAmount}`);
+  check('line 2 amount is 560500.00', num(line2?.lineAmount) === 560500, `got ${line2?.lineAmount}`);
+
+  check('subTotal is 525000.00', num(q?.subTotal) === 525000, `got ${q?.subTotal}`);
+  check('totalDiscount is 27500.00', num(q?.totalDiscount) === 27500, `got ${q?.totalDiscount}`);
+  check('totalGst is 89550.00', num(q?.totalGst) === 89550, `got ${q?.totalGst}`);
+  check('grandTotal is 587050.00', num(q?.grandTotal) === 587050, `got ${q?.grandTotal}`);
+
+  check(
+    'client-sent grandTotal was ignored',
+    num(q?.grandTotal) !== 1,
+    `client sent 1, server stored ${q?.grandTotal}`,
+  );
+  check('client-sent lineAmount was ignored', num(line1?.lineAmount) !== 1);
+
+  check(
+    'grandTotal equals subTotal - discount + gst',
+    num(q?.grandTotal) === num(q?.subTotal) - num(q?.totalDiscount) + num(q?.totalGst),
+  );
+
+  check(
+    'unit price defaults to the product base price when omitted',
+    await (async () => {
+      const dbProduct = await prisma.product.findUnique({ where: { id: products[2]!.id } });
+      const e = await call('POST', '/enquiries', {
+        token: salesToken,
+        body: {
+          customerId: customer.id,
+          enquiryDate: today,
+          requiredDate: nextMonth,
+          items: [{ productId: products[2]!.id, quantity: 10 }],
+        },
+      });
+      const defaulted = await call('POST', '/quotations', {
+        token: salesToken,
+        body: {
+          enquiryId: e.body?.data?.id,
+          quotationDate: today,
+          validUntil: nextMonth,
+          items: [{ productId: products[2]!.id, quantity: 10 }],
+        },
+      });
+      return num(defaulted.body?.data?.items?.[0]?.unitPrice) === num(dbProduct?.basePrice);
+    })(),
+  );
+
+  status(
+    'discount above 100 percent is rejected',
+    await call('POST', '/quotations', {
+      token: salesToken,
+      body: {
+        enquiryId: qEnquiryId,
+        quotationDate: today,
+        validUntil: nextMonth,
+        items: [{ productId: products[0]!.id, quantity: 1, unitPrice: 10, discountPercent: 150 }],
+      },
+    }),
+    400,
+  );
+
+  section('Quotation status transitions');
+
+  const enquiryAfterQuote = await call('GET', `/enquiries/${qEnquiryId}`, { token: salesToken });
+  check(
+    'raising a quotation moved the enquiry to QUOTED',
+    enquiryAfterQuote.body?.data?.status === 'QUOTED',
+    enquiryAfterQuote.body?.data?.status,
+  );
+
+  status(
+    'DRAFT cannot be accepted directly',
+    await call('PATCH', `/quotations/${q.id}/status`, {
+      token: salesToken,
+      body: { status: 'ACCEPTED' },
+    }),
+    409,
+  );
+
+  status(
+    'DRAFT moves to SENT',
+    await call('PATCH', `/quotations/${q.id}/status`, {
+      token: salesToken,
+      body: { status: 'SENT' },
+    }),
+    200,
+  );
+
+  status(
+    'SENT moves to ACCEPTED',
+    await call('PATCH', `/quotations/${q.id}/status`, {
+      token: salesToken,
+      body: { status: 'ACCEPTED' },
+    }),
+    200,
+  );
+
+  const enquiryAfterAccept = await call('GET', `/enquiries/${qEnquiryId}`, { token: salesToken });
+  check(
+    'accepting the quotation moved the enquiry to WON',
+    enquiryAfterAccept.body?.data?.status === 'WON',
+    enquiryAfterAccept.body?.data?.status,
+  );
+
+  status(
+    'ACCEPTED is terminal',
+    await call('PATCH', `/quotations/${q.id}/status`, {
+      token: salesToken,
+      body: { status: 'REJECTED' },
+    }),
+    409,
+  );
+
   // ------------------------------ summary -----------------------------------
   console.log(`\n${'='.repeat(60)}`);
   console.log(`passed ${passed}   failed ${failed}`);
