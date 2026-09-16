@@ -1,9 +1,29 @@
 // ---------------------------------------------------------------------------
-// ERP — Enquiry → Quotation → Sales Order → Reservation → Dispatch
+// ERP — Enquiry → Quotation → Sales Order → Inventory Reservation → Dispatch
 //
-// This file currently holds only what authentication needs. The full domain
-// model (customers, products, inventory, enquiries, quotations, sales orders
-// and dispatches) is added next.
+// Design decisions that carry the business rules:
+//
+//  * Money is Decimal(12,2), never Float. Floats cannot represent 0.1 exactly,
+//    so a quotation total built from floats drifts by paise as lines are added.
+//
+//  * Available stock is NOT a column. It is always physicalQty - reservedQty,
+//    computed in one place. Storing it would create three numbers that can
+//    disagree with each other, and nothing to say which one is right.
+//
+//  * sales_orders.quotationId is UNIQUE. "One quotation must not produce two
+//    sales orders" is therefore enforced by the database, not by application
+//    code that a race condition could slip past.
+//
+//  * sales_order_items.dispatchedQty tracks how much of each line has actually
+//    left the building, which is what makes dispatching the same quantity
+//    twice impossible.
+//
+//  * Line items snapshot unitPrice. The price on a quotation is the price that
+//    was negotiated; editing the product master later must not silently
+//    rewrite a document the customer already accepted.
+//
+//  * Deletes are soft (isActive) because documents reference these rows, and
+//    foreign keys are onDelete: Restrict so history cannot be orphaned.
 // ---------------------------------------------------------------------------
 
 generator client {
@@ -14,6 +34,8 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ------------------------------- enums --------------------------------------
 
 /// The business has exactly two kinds of user.
 ///
@@ -27,6 +49,35 @@ enum Role {
   SALES
 }
 
+/// NEW → QUOTED → WON / LOST
+enum EnquiryStatus {
+  NEW
+  QUOTED
+  WON
+  LOST
+}
+
+/// DRAFT → SENT → ACCEPTED / REJECTED
+/// Only an ACCEPTED quotation can become a sales order.
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+}
+
+/// PENDING → CONFIRMED → DISPATCHED, or CANCELLED from PENDING/CONFIRMED.
+/// Inventory is reserved on the PENDING → CONFIRMED transition, and released
+/// either by dispatching or by cancelling.
+enum SalesOrderStatus {
+  PENDING
+  CONFIRMED
+  DISPATCHED
+  CANCELLED
+}
+
+// -------------------------------- users -------------------------------------
+
 model User {
   id           String   @id @default(cuid())
   name         String
@@ -37,6 +88,331 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  customersCreated    Customer[]   @relation("CustomerCreatedBy")
+  enquiriesCreated    Enquiry[]    @relation("EnquiryCreatedBy")
+  quotationsCreated   Quotation[]  @relation("QuotationCreatedBy")
+  salesOrdersCreated  SalesOrder[] @relation("SalesOrderCreatedBy")
+  salesOrdersConfirmed SalesOrder[] @relation("SalesOrderConfirmedBy")
+  dispatchesCreated   Dispatch[]   @relation("DispatchCreatedBy")
+
   @@index([role])
   @@map("users")
+}
+
+// ------------------------------ customers -----------------------------------
+
+model Customer {
+  id            String   @id @default(cuid())
+  companyName   String
+  contactPerson String
+  // Mobile is how this business identifies a customer, so it is unique at the
+  // database level rather than only checked in application code — two
+  // concurrent creates cannot both slip through.
+  mobile        String   @unique
+  email         String
+  city          String
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  createdById String
+  createdBy   User   @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  enquiries   Enquiry[]
+  quotations  Quotation[]
+  salesOrders SalesOrder[]
+
+  @@index([companyName])
+  @@index([city])
+  @@index([isActive])
+  @@map("customers")
+}
+
+// -------------------------- products & inventory ----------------------------
+
+model Product {
+  id          String   @id @default(cuid())
+  productCode String   @unique
+  name        String
+  category    String
+  /// Unit of measure — NOS, KG, MTR, SET, LTR.
+  unit        String
+  /// Default price. A quotation may negotiate a different one, which is why
+  /// quotation_items carries its own unitPrice.
+  basePrice   Decimal  @db.Decimal(12, 2)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  inventory        Inventory?
+  enquiryItems     EnquiryItem[]
+  quotationItems   QuotationItem[]
+  salesOrderItems  SalesOrderItem[]
+  dispatchItems    DispatchItem[]
+
+  @@index([name])
+  @@index([category])
+  @@index([isActive])
+  @@map("products")
+}
+
+/// One row per product, holding the two numbers that actually matter.
+///
+///   physicalQty — what is on the shelf right now
+///   reservedQty — how much of that is already promised to confirmed orders
+///
+/// Available quantity is deliberately absent: it is physicalQty - reservedQty,
+/// derived wherever it is needed.
+///
+/// Confirming a sales order raises reservedQty and leaves physicalQty alone —
+/// a reservation is a promise, not a removal. Dispatching lowers both.
+///
+/// CHECK constraints (added in a follow-up migration, since Prisma cannot
+/// express them) make the impossible states unrepresentable:
+///   physical_qty >= 0, reserved_qty >= 0, reserved_qty <= physical_qty
+model Inventory {
+  id          String   @id @default(cuid())
+  physicalQty Int      @default(0)
+  reservedQty Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  productId String  @unique
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("inventory")
+}
+
+// ------------------------------- enquiries ----------------------------------
+
+model Enquiry {
+  id            String        @id @default(cuid())
+  enquiryNumber String        @unique
+  enquiryDate   DateTime
+  requiredDate  DateTime
+  status        EnquiryStatus @default(NEW)
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  createdById String
+  createdBy   User   @relation("EnquiryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  items      EnquiryItem[]
+  quotations Quotation[]
+
+  @@index([status])
+  @@index([customerId])
+  @@index([enquiryDate])
+  @@map("enquiries")
+}
+
+model EnquiryItem {
+  id       String  @id @default(cuid())
+  quantity Int
+  notes    String?
+
+  enquiryId String
+  enquiry   Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // One line per product per enquiry; quantities are merged, not duplicated.
+  @@unique([enquiryId, productId])
+  @@index([enquiryId])
+  @@map("enquiry_items")
+}
+
+// ------------------------------- quotations ---------------------------------
+
+/// Header totals are written by the backend from the line items. A total sent
+/// by the client is ignored — see quotation.service.ts.
+model Quotation {
+  id              String          @id @default(cuid())
+  quotationNumber String          @unique
+  quotationDate   DateTime
+  validUntil      DateTime
+  status          QuotationStatus @default(DRAFT)
+
+  /// Sum of quantity × unitPrice across all lines, before discount and GST.
+  subTotal      Decimal @db.Decimal(12, 2)
+  totalDiscount Decimal @db.Decimal(12, 2)
+  totalGst      Decimal @db.Decimal(12, 2)
+  /// What the customer pays. Sum of the line amounts.
+  grandTotal    Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enquiryId String
+  enquiry   Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Restrict)
+
+  // Denormalised from the enquiry so a quotation can be listed with its
+  // customer without a second join. Always copied from the enquiry, never
+  // taken from the request body.
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  createdById String
+  createdBy   User   @relation("QuotationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  items      QuotationItem[]
+  salesOrder SalesOrder?
+
+  @@index([status])
+  @@index([enquiryId])
+  @@index([customerId])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id       String @id @default(cuid())
+  quantity Int
+
+  /// Snapshot of the negotiated price. Independent of Product.basePrice, which
+  /// may change after the quotation is sent.
+  unitPrice       Decimal @db.Decimal(12, 2)
+  discountPercent Decimal @default(0) @db.Decimal(5, 2)
+  gstPercent      Decimal @default(0) @db.Decimal(5, 2)
+
+  /// (quantity × unitPrice − discount) + GST, rounded to 2dp once, here.
+  /// Computed by the backend; never accepted from the client.
+  lineAmount Decimal @db.Decimal(12, 2)
+
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([quotationId, productId])
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+// ------------------------------ sales orders --------------------------------
+
+model SalesOrder {
+  id          String           @id @default(cuid())
+  orderNumber String           @unique
+  orderDate   DateTime
+  status      SalesOrderStatus @default(PENDING)
+  totalAmount Decimal          @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  confirmedAt DateTime?
+  cancelledAt DateTime?
+  cancelReason String?
+
+  /// UNIQUE on purpose.
+  ///
+  /// The brief requires that one quotation cannot accidentally generate two
+  /// sales orders. The service checks for an existing order first, but that
+  /// check is a race: two simultaneous requests can both pass it. This
+  /// constraint is what actually makes it impossible — the second INSERT
+  /// fails with P2002, which the service translates into a clean 409.
+  quotationId String    @unique
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Restrict)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  createdById String
+  createdBy   User   @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  confirmedById String?
+  confirmedBy   User?   @relation("SalesOrderConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict)
+
+  items      SalesOrderItem[]
+  dispatches Dispatch[]
+
+  @@index([status])
+  @@index([customerId])
+  @@index([orderDate])
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id       String @id @default(cuid())
+  quantity Int
+
+  unitPrice  Decimal @db.Decimal(12, 2)
+  lineAmount Decimal @db.Decimal(12, 2)
+
+  /// How much of this line has already been dispatched.
+  ///
+  /// A dispatch is only allowed for (quantity - dispatchedQty), which is what
+  /// prevents the same quantity being dispatched twice. When every line has
+  /// dispatchedQty == quantity the order becomes DISPATCHED.
+  dispatchedQty Int @default(0)
+
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([salesOrderId, productId])
+  @@index([salesOrderId])
+  @@map("sales_order_items")
+}
+
+// ------------------------------- dispatches ---------------------------------
+
+model Dispatch {
+  id             String   @id @default(cuid())
+  dispatchNumber String   @unique
+  dispatchDate   DateTime
+  vehicleNumber  String
+  driverName     String
+  createdAt      DateTime @default(now())
+
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+
+  createdById String
+  createdBy   User   @relation("DispatchCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  items DispatchItem[]
+
+  @@index([salesOrderId])
+  @@index([dispatchDate])
+  @@map("dispatches")
+}
+
+model DispatchItem {
+  id       String @id @default(cuid())
+  quantity Int
+
+  dispatchId String
+  dispatch   Dispatch @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([dispatchId, productId])
+  @@index([dispatchId])
+  @@map("dispatch_items")
+}
+
+// --------------------------- document numbering -----------------------------
+
+/// Hands out human-readable document numbers: ENQ-202609-0001, QT-202609-0001,
+/// SO-202609-0001, DSP-202609-0001.
+///
+/// The counter is incremented inside the same transaction that creates the
+/// document, so two concurrent requests cannot be handed the same number — the
+/// second blocks on the row lock until the first commits. A `max(number) + 1`
+/// query would not have that property.
+model DocumentSequence {
+  /// "<PREFIX>-<YYYYMM>", e.g. "ENQ-202609"
+  key        String @id
+  lastNumber Int    @default(0)
+
+  @@map("document_sequences")
 }
