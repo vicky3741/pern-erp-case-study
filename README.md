@@ -15,10 +15,14 @@ Built as a Full-Stack Developer technical case study.
 
 | | |
 |---|---|
-| **Frontend** | _add after deploying — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)_ |
-| **API** | _add after deploying_ |
-| **Health check** | `<API URL>/api/health` |
+| **Frontend** | https://pern-erp-case-study.vercel.app |
+| **API** | https://pern-erp-api.onrender.com |
+| **Health check** | https://pern-erp-api.onrender.com/api/health |
 | **Repository** | https://github.com/vicky3741/pern-erp-case-study |
+
+> The API is on Render's free tier, which sleeps when idle. The first request
+> after a quiet period can take up to a minute while it wakes up. Load the
+> page once before a live demo and it stays fast after that.
 
 ### Test credentials
 
