@@ -4,6 +4,8 @@ import { authenticate, authorize } from '../../middleware/auth';
 import { idParamSchema } from '../../utils/query';
 import { cancelSalesOrderSchema, listSalesOrdersQuerySchema } from './salesOrder.schema';
 import * as controller from './salesOrder.controller';
+import { createDispatchSchema } from '../dispatches/dispatch.schema';
+import * as dispatchController from '../dispatches/dispatch.controller';
 
 /**
  * Reading is open to both roles — a sales user needs to see where an order got
@@ -33,6 +35,17 @@ router.post(
   authorize('ADMIN'),
   validate({ params: idParamSchema, body: cancelSalesOrderSchema }),
   controller.cancel,
+);
+
+/**
+ * Dispatch is the only operation that reduces physical stock, so it is ADMIN
+ * only like confirm and cancel. The handler belongs to the dispatch module.
+ */
+router.post(
+  '/:id/dispatch',
+  authorize('ADMIN'),
+  validate({ params: idParamSchema, body: createDispatchSchema }),
+  dispatchController.create,
 );
 
 export default router;

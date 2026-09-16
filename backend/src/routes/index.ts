@@ -6,6 +6,7 @@ import productRoutes from '../modules/products/product.routes';
 import inventoryRoutes from '../modules/inventory/inventory.routes';
 import quotationRoutes from '../modules/quotations/quotation.routes';
 import salesOrderRoutes from '../modules/sales-orders/salesOrder.routes';
+import dispatchRoutes from '../modules/dispatches/dispatch.routes';
 
 /**
  * Central API router.
@@ -80,6 +81,12 @@ router.get('/', (_req, res) => {
             'Confirm and reserve inventory inside a locked transaction (ADMIN)',
           'POST /api/sales-orders/:id/cancel':
             'Cancel and release any stock still reserved (ADMIN)',
+          'POST /api/sales-orders/:id/dispatch':
+            'Issue goods; physical and reserved both fall (ADMIN)',
+        },
+        dispatches: {
+          'GET /api/dispatches': 'Paginated dispatch register',
+          'GET /api/dispatches/:id': 'Dispatch detail with its lines',
         },
       },
     },
@@ -93,5 +100,6 @@ router.use('/products', productRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/quotations', quotationRoutes);
 router.use('/sales-orders', salesOrderRoutes);
+router.use('/dispatches', dispatchRoutes);
 
 export default router;
