@@ -1,7 +1,7 @@
 {
   "name": "pern-erp-backend",
   "version": "1.0.0",
-  "description": "ERP case study API — enquiry, quotation, sales order, inventory reservation, dispatch",
+  "description": "ERP case study API - enquiry, quotation, sales order, inventory reservation, dispatch",
   "main": "dist/server.js",
   "type": "commonjs",
   "engines": {
@@ -17,6 +17,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
+    "test:smoke": "tsx scripts/smoke-test.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
