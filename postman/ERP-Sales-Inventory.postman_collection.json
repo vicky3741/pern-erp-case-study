@@ -1,0 +1,626 @@
+{
+  "info": {
+    "name": "ERP — Sales & Inventory",
+    "description": "Enquiry → Quotation → Sales Order → Inventory Reservation → Dispatch.\n\nRun \"1. Happy Path\" top to bottom against a freshly seeded database — each request stores what the next one needs as a collection variable (token, customerId, enquiryId, quotationId, salesOrderId), so it can be run with Postman's Collection Runner start to finish with no manual editing.\n\n\"2. Failure Cases\" depends on nothing from folder 1 except the two logins and the seeded products, so it can be run on its own.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:4000/api" },
+    { "key": "salesToken", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "customerId", "value": "" },
+    { "key": "productIdA", "value": "" },
+    { "key": "productCodeA", "value": "BRG-6204" },
+    { "key": "productIdB", "value": "" },
+    { "key": "productCodeB", "value": "VLV-HYD-32" },
+    { "key": "enquiryId", "value": "" },
+    { "key": "enquiryNumber", "value": "" },
+    { "key": "quotationId", "value": "" },
+    { "key": "salesOrderId", "value": "" },
+    { "key": "draftEnquiryId", "value": "" },
+    { "key": "draftQuotationId", "value": "" },
+    { "key": "overEnquiryId", "value": "" },
+    { "key": "overQuotationId", "value": "" },
+    { "key": "overOrderId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Happy Path",
+      "item": [
+        {
+          "name": "Login as Sales",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"sales@erp.local\",\n  \"password\": \"Sales@123\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('token present', () => pm.expect(body.data.token).to.be.a('string'));",
+                  "pm.collectionVariables.set('salesToken', body.data.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login as Admin",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@erp.local\",\n  \"password\": \"Admin@123\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('adminToken', body.data.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Look up two seeded products",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/products?limit=100"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().data;",
+                  "const a = rows.find(p => p.productCode === pm.collectionVariables.get('productCodeA'));",
+                  "const b = rows.find(p => p.productCode === pm.collectionVariables.get('productCodeB'));",
+                  "pm.test('both seeded products found', () => { pm.expect(a).to.exist; pm.expect(b).to.exist; });",
+                  "pm.collectionVariables.set('productIdA', a.id);",
+                  "pm.collectionVariables.set('productIdB', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyName\": \"Postman Test Industries\",\n  \"contactPerson\": \"Test Contact\",\n  \"mobile\": \"9000000001\",\n  \"email\": \"buyer@postman-test.local\",\n  \"city\": \"Pune\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('customerId', body.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create enquiry (2 products)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/enquiries",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"enquiryDate\": \"2026-09-16\",\n  \"requiredDate\": \"2026-10-16\",\n  \"items\": [\n    { \"productId\": \"{{productIdA}}\", \"quantity\": 100 },\n    { \"productId\": \"{{productIdB}}\", \"quantity\": 40 }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('enquiry number follows ENQ-YYYYMM-NNNN', () => pm.expect(body.data.enquiryNumber).to.match(/^ENQ-\\d{6}-\\d{4}$/));",
+                  "pm.test('status starts NEW', () => pm.expect(body.data.status).to.eql('NEW'));",
+                  "pm.collectionVariables.set('enquiryId', body.data.id);",
+                  "pm.collectionVariables.set('enquiryNumber', body.data.enquiryNumber);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get enquiry detail",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/enquiries/{{enquiryId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('two line items', () => pm.expect(pm.response.json().data.items).to.have.lengthOf(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create quotation (server prices it)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enquiryId\": \"{{enquiryId}}\",\n  \"validUntil\": \"2026-10-16\",\n  \"grandTotal\": 1,\n  \"items\": [\n    { \"productId\": \"{{productIdA}}\", \"quantity\": 100, \"unitPrice\": 250, \"discountPercent\": 10, \"gstPercent\": 18 },\n    { \"productId\": \"{{productIdB}}\", \"quantity\": 40, \"unitPrice\": 12500, \"gstPercent\": 18 }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('grandTotal computed by the server, not the 1 sent in the body', () => pm.expect(Number(body.data.grandTotal)).to.eql(616550));",
+                  "pm.test('status starts DRAFT', () => pm.expect(body.data.status).to.eql('DRAFT'));",
+                  "pm.collectionVariables.set('quotationId', body.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark quotation SENT",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations/{{quotationId}}/status",
+            "body": { "mode": "raw", "raw": "{ \"status\": \"SENT\" }" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('200 OK, now SENT', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.status).to.eql('SENT'); });"] }
+              }
+          ]
+        },
+        {
+          "name": "Accept quotation",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations/{{quotationId}}/status",
+            "body": { "mode": "raw", "raw": "{ \"status\": \"ACCEPTED\" }" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('200 OK, now ACCEPTED', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.status).to.eql('ACCEPTED'); });"] }
+            }
+          ]
+        },
+        {
+          "name": "Convert quotation to sales order",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/quotations/{{quotationId}}/convert"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('order number follows SO-YYYYMM-NNNN', () => pm.expect(body.data.orderNumber).to.match(/^SO-\\d{6}-\\d{4}$/));",
+                  "pm.test('status starts PENDING', () => pm.expect(body.data.status).to.eql('PENDING'));",
+                  "pm.collectionVariables.set('salesOrderId', body.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sales cannot confirm (expect 403)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/sales-orders/{{salesOrderId}}/confirm"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('403 Forbidden — confirming is ADMIN only', () => pm.response.to.have.status(403));"] }
+            }
+          ]
+        },
+        {
+          "name": "Admin confirms — reserves stock",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/sales-orders/{{salesOrderId}}/confirm"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK, now CONFIRMED', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.status).to.eql('CONFIRMED'); });",
+                  "const items = pm.response.json().data.items;",
+                  "pm.test('reserved rose, physical untouched', () => items.forEach(i => { pm.expect(i.stock.reservedQty).to.be.at.least(i.quantity); }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dispatch the full order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/sales-orders/{{salesOrderId}}/dispatch",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dispatchDate\": \"2026-09-16\",\n  \"vehicleNumber\": \"MH12AB1234\",\n  \"driverName\": \"Suresh Patil\",\n  \"items\": [\n    { \"productId\": \"{{productIdA}}\", \"quantity\": 100 },\n    { \"productId\": \"{{productIdB}}\", \"quantity\": 40 }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('dispatch number follows DSP-YYYYMM-NNNN', () => pm.expect(pm.response.json().data.dispatchNumber).to.match(/^DSP-\\d{6}-\\d{4}$/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get sales order — DISPATCHED, reserved back to 0",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/sales-orders/{{salesOrderId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json().data;",
+                  "pm.test('status is DISPATCHED', () => pm.expect(body.status).to.eql('DISPATCHED'));",
+                  "pm.test('every line fully dispatched, nothing left reserved', () => body.items.forEach(i => { pm.expect(i.dispatchedQty).to.eql(i.quantity); pm.expect(i.stock.reservedQty).to.be.a('number'); }));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Failure Cases",
+      "item": [
+        {
+          "name": "No token → 401",
+          "request": { "method": "GET", "url": "{{baseUrl}}/enquiries" },
+          "event": [
+            { "listen": "test", "script": { "exec": ["pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"] } }
+          ]
+        },
+        {
+          "name": "Wrong password and unknown email → same 401 message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": { "mode": "raw", "raw": "{ \"email\": \"admin@erp.local\", \"password\": \"WrongPassword\" }" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "pm.test('generic message, does not confirm the email exists', () => pm.expect(pm.response.json().message).to.eql('Invalid email or password'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create enquiry with a duplicate product line → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/enquiries",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"enquiryDate\": \"2026-09-16\",\n  \"requiredDate\": \"2026-10-16\",\n  \"items\": [\n    { \"productId\": \"{{productIdA}}\", \"quantity\": 10 },\n    { \"productId\": \"{{productIdA}}\", \"quantity\": 5 }\n  ]\n}"
+            }
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"] } }
+          ]
+        },
+        {
+          "name": "Create DRAFT quotation, then try to convert it → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/enquiries",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"enquiryDate\": \"2026-09-16\",\n  \"requiredDate\": \"2026-10-16\",\n  \"items\": [ { \"productId\": \"{{productIdA}}\", \"quantity\": 5 } ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('enquiry created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('draftEnquiryId', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "  → create the DRAFT quotation",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enquiryId\": \"{{draftEnquiryId}}\",\n  \"validUntil\": \"2026-10-16\",\n  \"items\": [ { \"productId\": \"{{productIdA}}\", \"quantity\": 5, \"unitPrice\": 250 } ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created, DRAFT', () => { pm.response.to.have.status(201); pm.expect(pm.response.json().data.status).to.eql('DRAFT'); });",
+                  "pm.collectionVariables.set('draftQuotationId', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "  → convert the DRAFT quotation (expect 409)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/quotations/{{draftQuotationId}}/convert"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 Conflict — DRAFT cannot be converted', () => pm.response.to.have.status(409));",
+                  "pm.test('message names the actual status', () => pm.expect(pm.response.json().message).to.include('DRAFT'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Convert the SAME quotation twice → second is 409",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/quotations/{{quotationId}}/convert"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 Conflict — this quotation is already converted (run after folder 1)', () => pm.response.to.have.status(409));",
+                  "pm.test('message names the existing order', () => pm.expect(pm.response.json().message).to.include('SO-'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Order for more than available stock, confirm → 409 with shortfall",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/enquiries",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"enquiryDate\": \"2026-09-16\",\n  \"requiredDate\": \"2026-10-16\",\n  \"items\": [ { \"productId\": \"{{productIdA}}\", \"quantity\": 999999 } ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('enquiry created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('overEnquiryId', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "  → quote, accept, convert it",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enquiryId\": \"{{overEnquiryId}}\",\n  \"validUntil\": \"2026-10-16\",\n  \"items\": [ { \"productId\": \"{{productIdA}}\", \"quantity\": 999999, \"unitPrice\": 1 } ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('overQuotationId', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "  → send",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations/{{overQuotationId}}/status",
+            "body": { "mode": "raw", "raw": "{ \"status\": \"SENT\" }" }
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"] } }]
+        },
+        {
+          "name": "  → accept",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/quotations/{{overQuotationId}}/status",
+            "body": { "mode": "raw", "raw": "{ \"status\": \"ACCEPTED\" }" }
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"] } }]
+        },
+        {
+          "name": "  → convert",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{salesToken}}" }],
+            "url": "{{baseUrl}}/quotations/{{overQuotationId}}/convert"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('overOrderId', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "  → confirm (expect 409, insufficient stock)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/sales-orders/{{overOrderId}}/confirm"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "const body = pm.response.json();",
+                  "pm.test('message mentions Insufficient stock', () => pm.expect(body.message).to.include('Insufficient stock'));",
+                  "pm.test('details list a shortfall for the over-ordered product', () => pm.expect(body.details.insufficientStock[0].shortBy).to.be.greaterThan(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sales cannot create a product → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{salesToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productCode\": \"SHOULD-FAIL\",\n  \"name\": \"Should not be created\",\n  \"category\": \"Test\",\n  \"unit\": \"NOS\",\n  \"basePrice\": 1\n}"
+            }
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": ["pm.test('403 Forbidden — product creation is ADMIN only', () => pm.response.to.have.status(403));"] } }
+          ]
+        }
+      ]
+    }
+  ]
+}
