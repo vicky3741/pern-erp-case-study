@@ -17,6 +17,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
+    "db:reset": "tsx prisma/reset.ts && tsx prisma/seed.ts",
     "test:smoke": "tsx scripts/smoke-test.ts",
     "test": "vitest run",
     "test:watch": "vitest"
