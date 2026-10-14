@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Factory, Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { getApiErrorMessage } from '@/api/client';
+import { apiClient, getApiErrorMessage } from '@/api/client';
 
 /**
  * The two seeded accounts, with one-click fill.
@@ -25,6 +25,27 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [slow, setSlow] = useState(false);
+
+  // Wake the API as soon as this page opens. On a free tier the server sleeps
+  // when idle, and the first request after that waits for it to boot. Firing a
+  // harmless health check now means the boot happens while the user is typing
+  // their credentials instead of after they press Sign in. The result is
+  // ignored on purpose: this is only a nudge.
+  useEffect(() => {
+    apiClient.get('/health').catch(() => undefined);
+  }, []);
+
+  // If signing in is still pending after a few seconds, say why, so a sleeping
+  // server does not look like a frozen page.
+  useEffect(() => {
+    if (!submitting) {
+      setSlow(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlow(true), 5_000);
+    return () => clearTimeout(timer);
+  }, [submitting]);
 
   if (!authLoading && user) {
     const redirectTo = (location.state as { from?: string } | null)?.from ?? '/enquiries';
@@ -99,6 +120,13 @@ export function LoginPage() {
             {submitting && <Loader2 size={16} className="animate-spin" />}
             Sign in
           </button>
+
+          {slow && (
+            <p className="text-center text-xs text-amber-700" role="status">
+              The server is waking up after being idle (free hosting). This can take up to a
+              minute — please keep this page open.
+            </p>
+          )}
         </form>
 
         <div className="mt-4 card p-4">

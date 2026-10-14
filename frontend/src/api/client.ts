@@ -12,7 +12,11 @@ const baseURL = `${import.meta.env.VITE_API_URL ?? ''}/api`;
 export const apiClient = axios.create({
   baseURL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30_000,
+  // The API runs on a free tier that sleeps when idle, and waking it takes
+  // 30-60 seconds. A shorter timeout would abort the very first request after
+  // a quiet period with a misleading "timed out" error even though the server
+  // was about to answer.
+  timeout: 90_000,
 });
 
 const TOKEN_KEY = 'erp.token';
